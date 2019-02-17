@@ -1,5 +1,5 @@
 
-VERBOSE = True
+VERBOSE = False
 
 
 def winning_tx(tx1, tx2):
@@ -36,8 +36,9 @@ class Shard(object):
     def process_rollback_forward(self, tx, outbox, pending_txs, locks):
         assert tx.steps[tx.step_id].shard_id == self.shard_id
         for i, pending_tx in enumerate(pending_txs):
-            if pending_tx.tx_id == tx.tx_id:
-                pending_txs = pending_txs[:i] + pending_txs[i+1:]
+            if pending_tx.tx_id == tx.tx_id and pending_tx.step_id == tx.step_id:
+                pending_txs[i] = pending_txs[-1]
+                pending_txs.pop()
                 outgoing_msg = Message_Rollback_Backward(Transaction.clone_tx(tx, tx.step_id - 1))
                 if outgoing_msg.target_shard_id not in outbox:
                     outbox[outgoing_msg.target_shard_id] = []
@@ -45,7 +46,8 @@ class Shard(object):
                 break
         else:
             # no pending tx -- send further
-            assert tx.step_id + 1 < len(tx.steps), "A rollback forward overflow" # in theory can happen, but scenarios are designed not to have it happen
+            if tx.step_id + 1 == len(tx.steps):
+                return
             outgoing_msg = Message_Rollback_Forward(Transaction.clone_tx(tx, tx.step_id + 1))
             if outgoing_msg.target_shard_id not in outbox:
                 outbox[outgoing_msg.target_shard_id] = []
@@ -54,9 +56,11 @@ class Shard(object):
     def process_rollback_backward(self, tx, outbox, pending_txs, locks):
         assert tx.steps[tx.step_id].shard_id == self.shard_id
         contract_id = tx.steps[tx.step_id].contract_id
-        if contract_id not in locks or locks[contract_id].tx_id != tx.tx_id:
+        if contract_id not in locks or locks[contract_id].tx_id != tx.tx_id or locks[contract_id].attempt_id != tx.attempt_id:
             # the tx is already rolled back
             return
+
+        if VERBOSE: print("Successful rollback for step %s" % tx.step_id)
         del locks[contract_id]
 
         if tx.step_id > 0:
@@ -66,19 +70,33 @@ class Shard(object):
             outbox[outgoing_msg.target_shard_id].append(outgoing_msg)
         else:
             if VERBOSE: print("Restarting %s" % tx.tx_id)
-            pending_txs.append(tx) # restart the transaction
+            new_tx = Transaction.clone_tx(tx, 0)
+            new_tx.attempt_id += 1
+            outgoing_msg = Message_Execute(new_tx)
+            if outgoing_msg.target_shard_id not in outbox:
+                outbox[outgoing_msg.target_shard_id] = []
+            outbox[outgoing_msg.target_shard_id].append(outgoing_msg)
 
     def process_blocked(self, tx, tx_on, who_cares, outbox, pending_txs, locks, graph):
+        if tx.tx_id == tx_on.tx_id:
+            return
         if (tx.tx_id, tx_on.tx_id) in graph:
             return
 
         if who_cares is None:
             who_cares = losing_tx(tx, tx_on)
+        if VERBOSE: print("Blocked: %s on %s, cares %s on shard %s, shard id: %s" % (tx.tx_id, tx_on.tx_id, who_cares.tx_id, who_cares.originating_shard_id, self.shard_id))
 
         graph[(tx.tx_id, tx_on.tx_id)] = (tx, tx_on, who_cares)
 
         if who_cares.originating_shard_id != self.shard_id:
             outgoing_msg = Message_Blocked(tx, tx_on, who_cares.originating_shard_id)
+            if outgoing_msg.target_shard_id not in outbox:
+                outbox[outgoing_msg.target_shard_id] = []
+            outbox[outgoing_msg.target_shard_id].append(outgoing_msg)
+
+        if losing_tx(tx, tx_on).originating_shard_id != self.shard_id:
+            outgoing_msg = Message_Blocked(tx, tx_on, losing_tx(tx, tx_on).originating_shard_id)
             if outgoing_msg.target_shard_id not in outbox:
                 outbox[outgoing_msg.target_shard_id] = []
             outbox[outgoing_msg.target_shard_id].append(outgoing_msg)
@@ -127,6 +145,7 @@ class Shard(object):
         assert tx.steps[tx.step_id].shard_id == self.shard_id
         contract_id = tx.steps[tx.step_id].contract_id
         
+        if VERBOSE: print(locks, tx.step_id, tx.tx_id, tx.attempt_id)
         del locks[contract_id]
 
         if tx.step_id == 0:
@@ -199,11 +218,13 @@ class Transaction(object):
         self.originating_shard_id = originating_shard_id
         self.steps = steps
         self.step_id = 0
+        self.attempt_id = 0
 
     @classmethod
     def clone_tx(cls, tx, step_id):
         ret = Transaction(tx.tx_id, tx.originating_shard_id, tx.steps)
         ret.step_id = step_id
+        ret.attempt_id = tx.attempt_id
         return ret
 
 
