@@ -1,0 +1,66 @@
+<html><head>
+<script src='log.js'></script>
+<style>
+body {
+    font-family: Arial, Helvetica Neue, Helvetica, sans-serif
+}
+</style>
+</head>
+
+<body>
+
+<button onclick='next_step()'>Next step</button>
+
+<div id='here'>
+</div>
+
+</body>
+<script>
+var cur_step = 0;
+function render_step(step) {
+    var shs = '<b>Shards:</b><table>';
+    for (var shard_id = 0; shard_id < step.shards.length; ++ shard_id) {
+        var shard = step.shards[shard_id];
+        shs += '<tr><td valign=top height=50 width=75><pre><b>ID: ' + shard_id + '</b>\n';
+        for (var graph_entry of shard.graph) {
+            shs += graph_entry[0] + '->' + graph_entry[1] + '\n';
+        }
+        shs += '</pre></td>';
+
+        for (var block of shard.blocks) {
+            shs += '<td style="border: 1px solid black; width: 75px; height: 50px"><pre><small>' + block + '</small></pre></td>'
+        }
+
+        shs += '</tr>';
+    }
+    shs += '</table>';
+    var txs = '<b>Transactions:</b><table>';
+    for (var tx_id = 0; tx_id < step.txs.length; ++ tx_id) {
+        var tx = step.txs[tx_id];
+        txs += '<tr><td width=75 align=center>ID: <b>' + tx_id + '</b></td>';
+        for (var step_id = 0; step_id < tx.steps.length; ++ step_id) {
+            var step_data = tx.steps[step_id];
+            var clr = 'silver'; var fg = 'black';
+            if (step_id >= tx.stats[1]) clr = 'lime';
+            else if (step_id >= tx.stats[3]) { clr = 'black'; fg = 'white'; }
+            else if (step_id <= tx.stats[2]) clr = 'red';
+            else if (step_id <= tx.stats[0]) clr = 'yellow';
+            txs += '<td align=center style="width:50px;height:50px;background-color: ' + clr + '; color: ' + fg + '">(' + step_data[0] + ', ' + step_data[1] + ')</td>'
+        }
+        txs += '</tr>';
+    }
+    txs += '</table>';
+
+    document.getElementById('here').innerHTML = shs + txs;
+}
+
+function next_step() {
+    ++ cur_step;
+    if (cur_step < v.length) {
+        render_step(v[cur_step]);
+    }
+}
+render_step(v[0]);
+</script>
+</html>
+

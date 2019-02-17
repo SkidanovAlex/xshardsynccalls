@@ -17,8 +17,12 @@ class Shard(object):
         self.parent_id = parent_id
         self.child_ids = child_ids
         self.blocks = []
+        self.callback = None
 
     def process_message(self, msg, outbox, pending_txs, locks, graph):
+        if self.callback is not None:
+            self.callback(msg)
+
         if msg.msg_type == Message.EXECUTE:
             self.process_tx(msg.tx, outbox, pending_txs, locks, graph)
         elif msg.msg_type == Message.RETURN:
@@ -43,6 +47,8 @@ class Shard(object):
                 if outgoing_msg.target_shard_id not in outbox:
                     outbox[outgoing_msg.target_shard_id] = []
                 outbox[outgoing_msg.target_shard_id].append(outgoing_msg)
+                if self.callback is not None:
+                    self.callback(Message_Rollback_Backward(tx))
                 break
         else:
             # no pending tx -- send further
@@ -105,6 +111,8 @@ class Shard(object):
             if (tx_on.tx_id, tx.tx_id) in graph: # deadlock
                 if VERBOSE: print("Deadlock detected %s->%s, owner: %s, on shard %s" % (tx.tx_id, tx_on.tx_id, who_cares.tx_id, self.shard_id))
                 self.process_rollback_forward(Transaction.clone_tx(who_cares, 0), outbox, pending_txs, locks)
+                if self.callback is not None:
+                    self.callback(Message_Rollback_Forward(Transaction.clone_tx(who_cares, 0)))
             
         for other_tx, other_tx_on, other_who_cares in [v for v in graph.values()]:
             if other_tx_on.tx_id == tx.tx_id:
@@ -133,6 +141,8 @@ class Shard(object):
             if outgoing_msg.target_shard_id not in outbox:
                 outbox[outgoing_msg.target_shard_id] = []
             outbox[outgoing_msg.target_shard_id].append(outgoing_msg)
+            if self.callback is not None:
+                self.callback(Message_Return(tx))
         else:
             locks[contract_id] = tx
 
@@ -158,9 +168,10 @@ class Shard(object):
 
 
 class Block(object):
-    def __init__(self, prev_block, outbox, locks, pending_txs, graph):
+    def __init__(self, prev_block, inbox, outbox, locks, pending_txs, graph):
         super(Block, self).__init__()
         self.prev_block = prev_block
+        self.inbox = inbox
         self.outbox = outbox
         self.locks = locks
         self.pending_txs = pending_txs
@@ -185,11 +196,17 @@ class Message_Execute(Message):
         super(Message_Execute, self).__init__(Message.EXECUTE, tx.steps[tx.step_id].shard_id)
         self.tx = tx
 
+    def __str__(self):
+        return "E(%s)" % self.tx.tx_id
+
 
 class Message_Return(Message):
     def __init__(self, tx):
         super(Message_Return, self).__init__(Message.RETURN, tx.steps[tx.step_id].shard_id)
         self.tx = tx
+
+    def __str__(self):
+        return "R(%s)" % self.tx.tx_id
 
 
 class Message_Blocked(Message):
@@ -198,17 +215,26 @@ class Message_Blocked(Message):
         self.tx = tx
         self.tx_on = tx_on
 
+    def __str__(self):
+        return "B(%s->%s)" % (self.tx.tx_id, self.tx_on.tx_id)
+
 
 class Message_Rollback_Forward(Message):
     def __init__(self, tx):
         super(Message_Rollback_Forward, self).__init__(Message.ROLLBACK_FORWARD, tx.steps[tx.step_id].shard_id)
         self.tx = tx
 
+    def __str__(self):
+        return "rf(%s)" % self.tx.tx_id
+
 
 class Message_Rollback_Backward(Message):
     def __init__(self, tx):
         super(Message_Rollback_Backward, self).__init__(Message.ROLLBACK_BACKWARD, tx.steps[tx.step_id].shard_id)
         self.tx = tx
+
+    def __str__(self):
+        return "rb(%s)" % self.tx.tx_id
 
 
 class Transaction(object):

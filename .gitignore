@@ -1,3 +1,4 @@
 *.swp
 .env
 __pycache__
+log.js
